@@ -1,0 +1,5 @@
+# Scorer only (LinuxONE). Needs numpy + pandas and ONE of xgboost (--backend xgboost) or onnxruntime (--backend onnx).
+numpy==2.4.6
+onnxruntime==1.30.0
+pandas==3.0.6
+xgboost==3.2.0
