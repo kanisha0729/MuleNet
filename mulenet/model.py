@@ -127,7 +127,7 @@ def train(X_train, y_train, X_val, y_val, log=print):
 
 # ---------- artifacts ----------
 
-def save_artifacts(out_dir, booster, meta: dict) -> None:
+def save_artifacts(out_dir, booster, meta: dict, gnn_embeddings: dict[str, np.ndarray] = None) -> None:
     import onnxmltools
     from onnxmltools.convert.common.data_types import FloatTensorType
 
@@ -142,10 +142,22 @@ def save_artifacts(out_dir, booster, meta: dict) -> None:
     )
     (out / "model.onnx").write_bytes(onx.SerializeToString())
     (out / "meta.json").write_text(json.dumps(meta, indent=2) + "\n")
+    if gnn_embeddings is not None:
+        keys = np.array(list(gnn_embeddings.keys()))
+        vals = np.array(list(gnn_embeddings.values()), dtype=np.float32)
+        np.savez_compressed(out / "gnn_embeddings.npz", keys=keys, values=vals)
 
 
 def load_meta(artifacts_dir) -> dict:
     return json.loads((Path(artifacts_dir) / "meta.json").read_text())
+
+
+def load_gnn_embeddings(artifacts_dir) -> dict[str, np.ndarray]:
+    path = Path(artifacts_dir) / "gnn_embeddings.npz"
+    if not path.is_file():
+        return {}
+    data = np.load(path)
+    return dict(zip(data["keys"], data["values"]))
 
 
 def load_predictor(artifacts_dir, backend: str = "xgboost"):

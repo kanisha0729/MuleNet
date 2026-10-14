@@ -204,7 +204,7 @@ def trained(tmp_path_factory):
 
 def test_train_writes_artifacts_and_learns_the_planted_pattern(trained):
     _, _, artifacts, meta = trained
-    assert {p.name for p in artifacts.iterdir()} == {"model.json", "model.onnx", "meta.json"}
+    assert {"model.json", "model.onnx", "meta.json", "gnn_embeddings.npz"}.issubset({p.name for p in artifacts.iterdir()})
     assert json.loads((artifacts / "meta.json").read_text())["features"] == FEATURES
     assert meta["usd_rates"]["Euro"] == pytest.approx(1.17, rel=1e-3)
     test = meta["metrics"]["HI-Small/test"]["transactions"]
@@ -217,7 +217,7 @@ def test_onnx_matches_xgboost(trained):
     tmp, data_dir, artifacts, _ = trained
     df, _ = trim_and_split(load_transactions(data_dir / "HI-Small_Trans.csv"))
     meta = model.load_meta(artifacts)
-    gnn_embeddings = {k: np.array(v, dtype=np.float32) for k, v in meta["gnn_embeddings"].items()}
+    gnn_embeddings = model.load_gnn_embeddings(artifacts)
     X = build_features(df, meta["usd_rates"], gnn_embeddings).to_numpy()
     a = model.load_predictor(artifacts, "xgboost")(X)
     b = model.load_predictor(artifacts, "onnx")(X)

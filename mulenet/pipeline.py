@@ -67,14 +67,12 @@ def train(data_dir, artifacts_dir, log=print) -> dict:
             "accounts": model.account_metrics(model.account_scores(li_src, li_dst, li_y, p)),
         }
 
-    gnn_embeddings_list = {k: v.tolist() for k, v in gnn_embeddings.items()}
     meta = {
         "created": dt.datetime.now().isoformat(timespec="seconds"),
         "trained_on": "HI-Small",
         "splits": SPLITS,
         "features": FEATURES,
         "usd_rates": rates,
-        "gnn_embeddings": gnn_embeddings_list,
         "threshold": threshold,
         "params": model.PARAMS,
         "trees": booster.num_boosted_rounds(),
@@ -83,7 +81,7 @@ def train(data_dir, artifacts_dir, log=print) -> dict:
             booster.get_score(importance_type="total_gain").items(), key=lambda kv: -kv[1],
         )),
     }
-    model.save_artifacts(artifacts_dir, booster, meta)
+    model.save_artifacts(artifacts_dir, booster, meta, gnn_embeddings=gnn_embeddings)
     log(f"saved artifacts to {artifacts_dir}")
     return meta
 
@@ -91,7 +89,7 @@ def train(data_dir, artifacts_dir, log=print) -> dict:
 def export_check(data_dir, artifacts_dir, out_path, prefix="HI-Small", log=print) -> Path:
     """Write the test window with ids, features, label and this machine's score."""
     meta = model.load_meta(artifacts_dir)
-    gnn_embeddings = {k: np.array(v, dtype=np.float32) for k, v in meta["gnn_embeddings"].items()}
+    gnn_embeddings = model.load_gnn_embeddings(artifacts_dir)
     df, split, X, _ = _prepare(data_dir, prefix, usd_rates=meta["usd_rates"], gnn_embeddings=gnn_embeddings, log=log)
     m = (split == "test").to_numpy()
     df, X = df[m], X[m]
