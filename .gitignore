@@ -1,5 +1,45 @@
-data/
-.venv/
-reports/
-.pytest_cache/
+# Byte-compiled / optimized / DLL files
 __pycache__/
+*.py[cod]
+*$py.class
+
+# Caches and test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+.ipynb_checkpoints/
+
+# Virtual environments
+.venv/
+env/
+venv/
+ENV/
+
+# Large datasets & raw transaction files (>100MB rejected by GitHub)
+data/
+*.csv.gz
+*.parquet
+
+# Local experimentation & old checkpoints
+kaggle_output/
+artifacts_old_87/
+reports/
+tmp/
+*.log
+
+# OS & Editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Explicitly track essential model artifacts and app results
+!artifacts/
+!artifacts/model.onnx
+!artifacts/model.json
+!artifacts/meta.json
+!artifacts/gnn_embeddings.npz
+!results/
+!results/results.csv

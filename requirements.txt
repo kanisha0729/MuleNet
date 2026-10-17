@@ -1,0 +1,11 @@
+# MuleNet: Real-Time Money Mule Detection
+# Minimal production and app dependencies (works on x86_64, aarch64, and IBM LinuxONE s390x)
+
+numpy>=2.0.0
+pandas>=2.2.0
+onnxruntime>=1.18.0
+xgboost>=2.0.0
+streamlit>=1.40.0
+plotly>=5.24.0
+pyvis>=0.3.2
+pytest>=8.0.0

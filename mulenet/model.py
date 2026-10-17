@@ -21,7 +21,7 @@ PARAMS = {
     "subsample": 0.8,
     "colsample_bytree": 0.8,
     "min_child_weight": 5,
-    "scale_pos_weight": 5,
+    "scale_pos_weight": 25,
     "seed": 0,
 }
 NUM_ROUNDS = 2000
@@ -51,10 +51,17 @@ def average_precision(y, p) -> float:
     return float(np.sum(np.diff(np.r_[0.0, recall]) * precision))
 
 
-def best_f1_threshold(y, p) -> float:
+def best_fbeta_threshold(y, p, beta: float = 2.0) -> float:
+    """Threshold that maximizes F-beta score. beta=2.0 gives recall 2x the weight of precision."""
     precision, recall, thresholds = pr_curve(y, p)
-    f1 = np.where(precision + recall > 0, 2 * precision * recall / (precision + recall), 0.0)
-    return float(thresholds[np.argmax(f1)])
+    b2 = beta ** 2
+    denom = b2 * precision + recall
+    fbeta = np.where(denom > 0, (1 + b2) * precision * recall / denom, 0.0)
+    return float(thresholds[np.argmax(fbeta)])
+
+
+def best_f1_threshold(y, p) -> float:
+    return best_fbeta_threshold(y, p, beta=1.0)
 
 
 def classification_metrics(y, p, threshold: float) -> dict:
@@ -170,9 +177,16 @@ def load_predictor(artifacts_dir, backend: str = "xgboost"):
         booster.load_model(path / "model.json")
         return lambda X: booster.predict(xgb.DMatrix(X, feature_names=FEATURES))
     if backend == "onnx":
+        import os
         import onnxruntime as ort
 
-        session = ort.InferenceSession(str(path / "model.onnx"), providers=["CPUExecutionProvider"])
+        so = ort.SessionOptions()
+        so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        # Configurable intra-op threads for s390x Telum co-processors
+        so.intra_op_num_threads = int(os.environ.get("ORT_INTRA_OP_NUM_THREADS", min(4, os.cpu_count() or 1)))
+        so.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+
+        session = ort.InferenceSession(str(path / "model.onnx"), sess_options=so, providers=["CPUExecutionProvider"])
         name = session.get_inputs()[0].name
         return lambda X: session.run(None, {name: np.ascontiguousarray(X, dtype=np.float32)})[1][:, 1]
     raise ValueError(f"unknown backend {backend!r} (use 'xgboost' or 'onnx')")

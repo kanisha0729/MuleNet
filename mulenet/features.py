@@ -8,6 +8,8 @@ never used, so features are identical at training and scoring time.
 import numpy as np
 import pandas as pd
 
+from .streaming import StreamingAccountStateStore
+
 WINDOWS = {"6h": 6 * 60, "24h": 24 * 60, "7d": 7 * 24 * 60}  # minutes
 MAX_WINDOW = max(WINDOWS.values())
 
@@ -36,9 +38,54 @@ FLOW_FEATURES = [
     for stat in ("cnt", "usd", "uniq")
 ] + [f"{prefix}_mins_since_prev" for prefix, _, _ in FLOWS]
 PAIR_FEATURES = [f"pair_cnt_{w}" for w in WINDOWS]
+
+INVARIANT_FEATURES = [
+    # Flow Throughput Ratios across 6h, 24h, 7d
+    "src_throughput_ratio_6h", "src_throughput_ratio_24h", "src_throughput_ratio_7d",
+    "dst_throughput_ratio_6h", "dst_throughput_ratio_24h", "dst_throughput_ratio_7d",
+    # Net Balance Retention Ratios across 24h, 7d
+    "src_retention_ratio_24h", "src_retention_ratio_7d",
+    "dst_retention_ratio_24h", "dst_retention_ratio_7d",
+    # Pass-Through Turnaround
+    "src_passthrough_delta", "src_rapid_turnaround_flag",
+    # Sleep & Wake Dormancy Spurt
+    "src_dormancy_spurt", "dst_dormancy_spurt",
+]
+
+STRUCTURING_AND_FAN_FEATURES = [
+    # CTR Structuring (< $10,000 threshold evasion)
+    "sub_ctr_structuring",
+    # Counterparty Fan Imbalance (Funnel vs Smurf)
+    "src_fan_ratio_24h", "dst_fan_ratio_24h",
+    "src_fan_ratio_7d", "dst_fan_ratio_7d",
+    # Velocity Acceleration (6h vs 24h burst)
+    "src_usd_acceleration_6h_24h", "dst_usd_acceleration_6h_24h",
+]
+
+COLD_START_FEATURES = [
+    "src_is_gnn_cold_start",
+    "dst_is_gnn_cold_start",
+    "both_cold_start",
+]
+
+ENTITY_FEATURES = [
+    "src_entity_type",
+    "dst_entity_type",
+    "same_entity_transfer",
+]
+
 GNN_DIM = 16
 GNN_FEATURES = [f"src_gnn_{i}" for i in range(GNN_DIM)] + [f"dst_gnn_{i}" for i in range(GNN_DIM)]
-FEATURES = TXN_FEATURES + FLOW_FEATURES + PAIR_FEATURES + GNN_FEATURES
+FEATURES = (
+    TXN_FEATURES
+    + FLOW_FEATURES
+    + PAIR_FEATURES
+    + INVARIANT_FEATURES
+    + STRUCTURING_AND_FAN_FEATURES
+    + COLD_START_FEATURES
+    + ENTITY_FEATURES
+    + GNN_FEATURES
+)
 
 _KEY_SPAN = np.int64(2**32)  # > any minute offset we will see; keeps key*span+t in int64
 
@@ -110,7 +157,12 @@ def _new_counterparty_flags(acct, other, t) -> np.ndarray:
     return flags
 
 
-def build_features(df: pd.DataFrame, usd_rates: dict[str, float], gnn_embeddings: dict[str, np.ndarray] = None) -> pd.DataFrame:
+def build_features(
+    df: pd.DataFrame,
+    usd_rates: dict[str, float],
+    gnn_embeddings: dict[str, np.ndarray] = None,
+    accounts_metadata: dict[str, dict] = None,
+) -> pd.DataFrame:
     """One float32 feature row per transaction, aligned with df's index."""
     src, dst = account_keys(df)
     codes, _ = pd.factorize(pd.concat([src, dst], ignore_index=True))
@@ -156,8 +208,47 @@ def build_features(df: pd.DataFrame, usd_rates: dict[str, float], gnn_embeddings
     for w in WINDOWS:
         f[f"pair_cnt_{w}"] = pair_stats[f"cnt_{w}"]
 
-    # --- Add GNN Embeddings ---
+    # --- Pattern-Agnostic Flow Invariants ---
+    for w in WINDOWS:
+        f[f"src_throughput_ratio_{w}"] = (f[f"src_out_usd_{w}"] + 1.0) / (f[f"src_in_usd_{w}"] + 1.0)
+        f[f"dst_throughput_ratio_{w}"] = (f[f"dst_out_usd_{w}"] + 1.0) / (f[f"dst_in_usd_{w}"] + 1.0)
+
+    for w in ("24h", "7d"):
+        f[f"src_retention_ratio_{w}"] = np.maximum(0.0, f[f"src_in_usd_{w}"] - f[f"src_out_usd_{w}"]) / (f[f"src_in_usd_{w}"] + 1.0)
+        f[f"dst_retention_ratio_{w}"] = np.maximum(0.0, f[f"dst_in_usd_{w}"] - f[f"dst_out_usd_{w}"]) / (f[f"dst_in_usd_{w}"] + 1.0)
+
+    f["src_passthrough_delta"] = np.abs(f["src_out_mins_since_prev"] - f["src_in_mins_since_prev"])
+    f["src_rapid_turnaround_flag"] = (f["src_in_mins_since_prev"] < 60.0).astype(np.float32)
+
+    src_prior_daily_avg = np.maximum(0.0, f["src_out_usd_7d"] - f["src_out_usd_24h"]) / 6.0
+    f["src_dormancy_spurt"] = (f["src_out_usd_24h"] + 1.0) / (src_prior_daily_avg + 1.0)
+
+    dst_prior_daily_avg = np.maximum(0.0, f["dst_in_usd_7d"] - f["dst_in_usd_24h"]) / 6.0
+    f["dst_dormancy_spurt"] = (f["dst_in_usd_24h"] + 1.0) / (dst_prior_daily_avg + 1.0)
+
+    # --- Structuring & Counterparty Fan Invariants ---
+    # CTR Structuring (< $10,000 threshold evasion): linear rise from 7,500 to 9,999 USD
+    f["sub_ctr_structuring"] = np.where(
+        (usd_paid >= 7500.0) & (usd_paid < 10000.0),
+        (usd_paid - 7500.0) / 2500.0,
+        0.0,
+    ).astype(np.float32)
+
+    # Counterparty Fan Imbalance across 24h and 7d (Funnel vs Smurf)
+    f["src_fan_ratio_24h"] = ((f["src_out_uniq_24h"] + 1.0) / (f["src_in_uniq_24h"] + 1.0)).astype(np.float32)
+    f["dst_fan_ratio_24h"] = ((f["dst_out_uniq_24h"] + 1.0) / (f["dst_in_uniq_24h"] + 1.0)).astype(np.float32)
+    f["src_fan_ratio_7d"] = ((f["src_out_uniq_7d"] + 1.0) / (f["src_in_uniq_7d"] + 1.0)).astype(np.float32)
+    f["dst_fan_ratio_7d"] = ((f["dst_out_uniq_7d"] + 1.0) / (f["dst_in_uniq_7d"] + 1.0)).astype(np.float32)
+
+    # Velocity Acceleration: ratio of 6-hour volume to 24-hour volume
+    f["src_usd_acceleration_6h_24h"] = ((f["src_out_usd_6h"] + 1.0) / (f["src_out_usd_24h"] + 1.0)).astype(np.float32)
+    f["dst_usd_acceleration_6h_24h"] = ((f["dst_in_usd_6h"] + 1.0) / (f["dst_in_usd_24h"] + 1.0)).astype(np.float32)
+
+    # --- Add GNN Embeddings & Cold-Start Indicators ---
     if gnn_embeddings is not None:
+        src_cold = np.array([0.0 if k in gnn_embeddings else 1.0 for k in src], dtype=np.float32)
+        dst_cold = np.array([0.0 if k in gnn_embeddings else 1.0 for k in dst], dtype=np.float32)
+
         def get_embs(keys):
             emb_list = [gnn_embeddings.get(k, np.zeros(GNN_DIM, dtype=np.float32)) for k in keys]
             return np.vstack(emb_list).astype(np.float32)
@@ -165,8 +256,33 @@ def build_features(df: pd.DataFrame, usd_rates: dict[str, float], gnn_embeddings
         src_emb = get_embs(src)
         dst_emb = get_embs(dst)
     else:
+        src_cold = np.ones(n, dtype=np.float32)
+        dst_cold = np.ones(n, dtype=np.float32)
         src_emb = np.zeros((n, GNN_DIM), dtype=np.float32)
         dst_emb = np.zeros((n, GNN_DIM), dtype=np.float32)
+
+    f["src_is_gnn_cold_start"] = src_cold
+    f["dst_is_gnn_cold_start"] = dst_cold
+    f["both_cold_start"] = src_cold * dst_cold
+
+    # --- Entity Ownership Features ---
+    if accounts_metadata:
+        src_types = np.array([float(accounts_metadata.get(k, {}).get("entity_type_code", 0.0)) for k in src], dtype=np.float32)
+        dst_types = np.array([float(accounts_metadata.get(k, {}).get("entity_type_code", 0.0)) for k in dst], dtype=np.float32)
+        src_eids = [accounts_metadata.get(k, {}).get("entity_id", "") for k in src]
+        dst_eids = [accounts_metadata.get(k, {}).get("entity_id", "") for k in dst]
+        same_e = np.array([
+            1.0 if (s and d and s == d) else 0.0
+            for s, d in zip(src_eids, dst_eids)
+        ], dtype=np.float32)
+    else:
+        src_types = np.zeros(n, dtype=np.float32)
+        dst_types = np.zeros(n, dtype=np.float32)
+        same_e = np.zeros(n, dtype=np.float32)
+
+    f["src_entity_type"] = src_types
+    f["dst_entity_type"] = dst_types
+    f["same_entity_transfer"] = same_e
 
     for i in range(GNN_DIM):
         f[f"src_gnn_{i}"] = src_emb[:, i]
