@@ -1,4 +1,4 @@
-# MuleNet: Real-Time Detection of Money Mule Accounts on IBM LinuxONE
+# MuleNet: Money Mule Account Risk Scoring (built for IBM LinuxONE)
 
 [![Platform: IBM LinuxONE](https://img.shields.io/badge/Platform-IBM%20LinuxONE%20(s390x)-052FAD.svg?logo=ibm)](https://www.ibm.com/products/linuxone-4)
 [![Runtime: ONNX](https://img.shields.io/badge/Runtime-ONNX%201.30-005CED.svg?logo=onnx)](https://onnx.ai/)
@@ -9,20 +9,22 @@
 > **IBM Z Datathon 2026** | **Theme:** *Real-Time AI for Critical Decisions*  
 > **Team:** Cryptic Vectors — Department of Artificial Intelligence and Data Science, Sona College of Technology, Salem, Tamil Nadu, India
 
+> **Status and disclosure.** This is a prototype. Test PR-AUC is 0.165 (precision 0.18, recall 0.28) on IBM's synthetic HI-Small data; `results/results.csv` is a stratified sample, so alert counts are inflated. The demo UI replays precomputed scores. An IBM LinuxONE (s390x) environment was verified, but scoring was NOT run there, and latency figures, "sub-millisecond" and Telum statements in this README are design targets, not measured results. The model and training code predate the event (commits from Oct 8 and Oct 14); the UI, replay API and LinuxONE verification were built during it, and we disclose this for the organisers' determination.
+
 ---
 
 ## 📌 Executive Summary
 
 In digital payment fraud and scam operations, illicit funds rarely linger in the fraudster's initial account. Instead, money is routed through **money mule accounts**—often rented, sold, or unwitting individuals—and rapidly layered across multi-bank networks within minutes. Traditional anti-money laundering (AML) workflows discover mule networks post-facto via overnight batch reconciliations, long after the stolen funds have exited the banking perimeter.
 
-Inspired by initiatives like the Reserve Bank Innovation Hub's **MuleHunter.AI** (deployed across 31 commercial banks), **MuleNet** shifts detection from retroactive batch audits to **in-transaction, real-time intervention**. By combining strictly causal rolling behavioral features with Graph Neural Network (GraphSAGE) topological embeddings, MuleNet evaluates transaction and account risk in **sub-millisecond latency** directly on core banking infrastructure, intercepting fraudulent transfers before outbound settlement.
+Inspired by initiatives like the Reserve Bank Innovation Hub's **MuleHunter.AI** (deployed across 31 commercial banks), **MuleNet** shifts detection from retroactive batch audits to **in-transaction, real-time intervention**. By combining strictly causal rolling behavioral features with Graph Neural Network (GraphSAGE) topological embeddings, MuleNet is designed to evaluate transaction and account risk with low latency on core banking infrastructure. Latency on LinuxONE has not been measured.
 
 ---
 
 ## 🏛️ Why IBM LinuxONE & z16 Telum?
 
 1. **Data Gravity & Zero Egress:** Core transactional databases already reside on IBM Z / LinuxONE mainframes. Scoring transactions in-situ prevents piping sensitive financial PII over external public cloud networks.
-2. **Sub-Millisecond AI Latency ($200\text{ ms} \rightarrow \approx 0.05\text{ ms}$):** Leveraging the **IBM Telum on-chip integrated AI accelerator**, MuleNet eliminates PCIe bus bottlenecks, enabling complex model scoring *inside* the live transaction processing loop without degrading customer payment latency (p50 = **0.046 ms**).
+2. **Sub-Millisecond AI Latency ($200\text{ ms} \rightarrow \approx 0.05\text{ ms}$):** Leveraging the **IBM Telum on-chip integrated AI accelerator**, MuleNet eliminates PCIe bus bottlenecks, enabling complex model scoring *inside* the live transaction processing loop without degrading customer payment latency (design target; the latency figures in this README were not measured on LinuxONE or Telum).
 3. **Decoupled Scoring Footprint:** MuleNet exports trained models to **ONNX**, enabling scoring via a standalone runtime footprint ($<10\text{ MB}$ memory, pure NumPy/Pandas/ONNX Runtime) requiring zero heavyweight PyTorch dependencies on the s390x mainframe environment.
 
 ---
@@ -109,7 +111,7 @@ Evaluated on the official **IBM Transactions for Anti-Money Laundering (AML)** d
 - **RANDOM:** **27.9%** recall (12 / 43 caught)
 - **UNPATTERNED:** **18 transactions caught** (subtle structuring & burst transfers)
 
-### Real-Time Inference Latency (ONNX Runtime)
+### Inference Latency (ONNX Runtime; see status note, not measured on LinuxONE or Telum)
 - **p50:** **0.046 ms** (46 microseconds)
 - **p95:** **0.054 ms** (54 microseconds)
 - **p99:** **0.062 ms** (62 microseconds)
